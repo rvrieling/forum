@@ -1,0 +1,82 @@
+stages: 
+  - test
+  - build
+  - deploy
+
+php-style-tester: 
+  stage: test
+  image: beeproger/php-7.2:1.0
+  script:
+    - wget -q -O php-cs-fixer.phar https://cs.sensiolabs.org/download/php-cs-fixer-v2.phar
+    - php php-cs-fixer.phar fix --verbose --dry-run --diff-format udiff --ansi --config=.php_cs app
+  tags: 
+    - test
+
+build_backend:
+  stage: build
+  image: beeproger/php-7.2:1.0
+  script: 
+    - composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts
+  artifacts:
+    paths:
+      - app
+      - bootstrap
+      - config
+      - database
+      - public
+      - resources
+      - routes
+      - vendor
+      - artisan
+    expire_in: 1 days
+    when: on_success
+  tags:
+    - builds
+
+build_frontend:
+  stage: build
+  image: beeproger/node-10:1.0
+  script: 
+    - npm install
+  artifacts: 
+    paths: 
+    - node_modules
+    expire_in: 1 days
+    when: on_success
+  tags: 
+  - builds
+
+
+deploy_production:
+  variables: {
+    SSH: ssh -tt $USER@$HOST
+  }
+  stage: deploy
+  image: beeproger/php-7.2:1.0
+  before_script: 
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - $SSH "mkdir -p $FILE_PATH_PRODUCTION"
+    - scp -r * $USER@$HOST:$FILE_PATH_PRODUCTION
+    - $SSH "echo '$ENV' > $FILE_PATH_PRODUCTION/.env"
+    - $SSH "mkdir -p $FILE_PATH_PRODUCTION/app/public"
+    - $SSH "mkdir -p $FILE_PATH_PRODUCTION/framework/cache views testing sessions"
+    - $SSH "chmod -R 777 $FILE_PATH_PRODUCTION/storage"
+  dependencies: 
+    - build_backend
+    - build_frontend
+  environment:
+    name: production
+    url: $PROD_URL
+  script:
+    - $SSH "php $FILE_PATH_PRODUCTION/artisan migrate --force"
+    - $SSH "php $FILE_PATH_PRODUCTION/artisan storage:link"
+  only: 
+    - master
+  when: manual
+  tags:
+    - deploy
+      
